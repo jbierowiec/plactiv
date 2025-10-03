@@ -1,0 +1,5 @@
+body { background: #f6f7fb; }
+.card { border: 0; border-radius: 1rem; }
+.navbar-brand { letter-spacing: 0.2px; }
+.speed-btn.active { color: #fff !important; }
+video { image-rendering: auto; }

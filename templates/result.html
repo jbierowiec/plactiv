@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>GPX Flyover — Result</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/main.css') }}" rel="stylesheet">
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+
+  <style>
+    .video-wrap { position: relative; }
+    .hud {
+      position: absolute; inset: 12px auto auto 12px;
+      background: rgba(0,0,0,.55); color: #fff; border-radius: 12px;
+      padding: 10px 12px; min-width: 240px; backdrop-filter: blur(3px);
+    }
+    .hud .val { font-weight: 700; }
+    .mini-chart {
+      position: absolute; right: 12px; bottom: 12px;
+      background: rgba(0,0,0,.55); padding: 8px; border-radius: 12px;
+    }
+    .mini-chart canvas { width: 320px; height: 120px; }
+    .chart-wrap { height: 220px; }
+    .speed-btn.active { color: #fff !important; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+    <div class="container">
+      <a class="navbar-brand fw-semibold" href="/">GPX Flyover</a>
+    </div>
+  </nav>
+
+  <main class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-xl-10">
+        <div class="card shadow-sm">
+          <div class="card-body p-4">
+            <h1 class="h4 mb-3">Your Flyover</h1>
+
+            <div class="video-wrap mb-2">
+              <video id="flyover" class="w-100 rounded border" controls preload="metadata">
+                <source src="{{ video_url }}" type="video/mp4">
+              </video>
+
+              <!-- Stats HUD (toggleable) -->
+              <div id="hud" class="hud small">
+                <div class="d-flex justify-content-between">
+                  <span>Speed</span><span class="val" id="hud-speed">— mph</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                  <span>Elevation</span><span class="val" id="hud-elev">— ft</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                  <span>Distance</span><span class="val" id="hud-dist">— mi</span>
+                </div>
+              </div>
+
+              <!-- Mini elevation chart overlay (toggleable) -->
+              <div id="miniWrap" class="mini-chart">
+                <canvas id="miniChart" width="320" height="120"></canvas>
+              </div>
+            </div>
+
+            <!-- Summary after video ends -->
+            <div id="summaryBar" class="alert alert-secondary d-none mb-3">
+              <strong>Summary:</strong>
+              <span class="ms-2">Avg speed <span id="sum-avg">—</span></span>
+              <span class="ms-3">Elevation gain <span id="sum-gain">—</span></span>
+              <span class="ms-3">Distance <span id="sum-dist">—</span></span>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <div class="d-flex align-items-center gap-2">
+                <span class="text-muted me-2">Speed:</span>
+                <button class="btn btn-outline-primary speed-btn active" data-rate="1">1×</button>
+                <button class="btn btn-outline-primary speed-btn" data-rate="2">2×</button>
+                <button class="btn btn-outline-primary speed-btn" data-rate="3">3×</button>
+                <button class="btn btn-outline-primary speed-btn" data-rate="5">5×</button>
+                <button class="btn btn-outline-primary speed-btn" data-rate="10">10×</button>
+              </div>
+
+              <div class="ms-auto d-flex gap-2">
+                <button id="toggleHud" class="btn btn-outline-secondary">Hide stats</button>
+                <button id="toggleMini" class="btn btn-outline-secondary">Hide mini chart</button>
+                <a id="dlBtn" class="btn btn-success" href="{{ url_for('download', vid=vid) }}?hud=1&chart=1">Download MP4</a>
+              </div>
+            </div>
+
+            <hr class="my-4">
+
+            <h2 class="h6 mb-2">Elevation vs Distance</h2>
+            <div class="chart-wrap">
+              <canvas id="elevChart"></canvas>
+            </div>
+            <div class="form-text">Click the chart to seek the video.</div>
+
+            <hr class="my-4">
+            <a href="{{ url_for('video') }}" class="btn btn-secondary">Generate another</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const PROFILE_URL = "{{ profile_url }}";
+    const DL_BASE = "{{ url_for('download', vid=vid) }}";
+  </script>
+
+  <script>
+    (async function () {
+      const res = await fetch(PROFILE_URL);
+      const prof = await res.json();
+
+      const dist = prof.distance_miles.map(Number);
+      const elev = prof.elevation_feet.map(Number);
+      const gain = (prof.cum_gain_feet || []).map(Number);
+      const totalMiles = Number(prof.total_miles);
+      const durationS  = Number(prof.duration_s || 60);
+      const hasTime    = !!prof.has_time;
+      const timeS      = (prof.time_s || []).map(Number);
+      const movingTimeS= hasTime && prof.moving_time_s != null ? Number(prof.moving_time_s) : durationS;
+      const totalGainFt= Number(prof.total_gain_feet || (gain.length?gain[gain.length-1]:0));
+      const avgMph     = totalMiles / Math.max(1e-6, (movingTimeS/3600));
+
+      // per-segment mph
+      const segMph = [];
+      if (hasTime && timeS.length === dist.length) {
+        for (let i=0;i<dist.length-1;i++){
+          const dmi = Math.max(0, dist[i+1]-dist[i]);
+          const dt  = Math.max(0.001, timeS[i+1]-timeS[i]) / 3600.0;
+          segMph.push(dmi/dt);
+        }
+      } else {
+        for (let i=0;i<dist.length-1;i++) segMph.push(avgMph);
+      }
+
+      function idxForMiles(mi){ let lo=0, hi=dist.length-1; while(lo<hi){const m=(lo+hi)>>1; (dist[m]<mi)?lo=m+1:hi=m;} return Math.max(1, lo)-1; }
+      function mphAtMiles(mi){ const i=idxForMiles(mi); let s=0,n=0; for(let k=-2;k<=2;k++){ const j=i+k; if(j>=0 && j<segMph.length){s+=segMph[j]; n++;}} return s/Math.max(1,n); }
+      function elevAtMiles(mi){
+        if(mi<=dist[0]) return elev[0];
+        if(mi>=dist[dist.length-1]) return elev[elev.length-1];
+        const i=idxForMiles(mi); const t=(mi-dist[i])/(dist[i+1]-dist[i]); return elev[i]+t*(elev[i+1]-elev[i]);
+      }
+      function milesAtTime(t){ return Math.max(0, Math.min(totalMiles, totalMiles*(t/durationS))); }
+
+      // Big chart
+      const ctx = document.getElementById('elevChart').getContext('2d');
+      const cursorId = 'cursor';
+      const chart = new Chart(ctx, {
+        type:'line',
+        data:{ labels: dist, datasets:[{ label:'Elevation (ft)', data:elev, borderWidth:2, pointRadius:0, tension:.2 }]},
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          scales:{ x:{type:'linear', title:{display:true,text:'Distance (mi)'}}, y:{title:{display:true,text:'Elevation (ft)'}} },
+          plugins:{ legend:{display:false}, annotation:{ annotations:{ [cursorId]:{type:'line',xMin:0,xMax:0,borderColor:'#ff6d00',borderWidth:2}}}}
+        }
+      });
+      function updateCursor(mi){ chart.options.plugins.annotation.annotations[cursorId].xMin=mi; chart.options.plugins.annotation.annotations[cursorId].xMax=mi; chart.update('none'); }
+
+      // Mini chart overlay
+      const miniCtx = document.getElementById('miniChart').getContext('2d');
+      const miniCursorId='miniCursor';
+      const mini = new Chart(miniCtx,{
+        type:'line',
+        data:{ labels:dist, datasets:[{ data:elev, borderWidth:2, pointRadius:0, tension:.2 }]},
+        options:{
+          responsive:false, animation:false,
+          scales:{ x:{display:false, type:'linear'}, y:{display:false} },
+          plugins:{ legend:{display:false}, annotation:{ annotations:{ [miniCursorId]:{type:'line',xMin:0,xMax:0,borderColor:'#ff6d00',borderWidth:2}}}},
+          elements:{ line:{ borderColor:'#90caf9' } }
+        }
+      });
+      function updateMini(mi){ mini.options.plugins.annotation.annotations[miniCursorId].xMin=mi; mini.options.plugins.annotation.annotations[miniCursorId].xMax=mi; mini.update('none'); }
+
+      // HUD + summary hookup
+      const video   = document.getElementById('flyover');
+      const $speed  = document.getElementById('hud-speed');
+      const $elev   = document.getElementById('hud-elev');
+      const $dist   = document.getElementById('hud-dist');
+      const $hud    = document.getElementById('hud');
+      const $miniW  = document.getElementById('miniWrap');
+      const $toggle = document.getElementById('toggleHud');
+      const $togMini= document.getElementById('toggleMini');
+      const $dl     = document.getElementById('dlBtn');
+      const $sumBar = document.getElementById('summaryBar');
+      const $sumAvg = document.getElementById('sum-avg');
+      const $sumGain= document.getElementById('sum-gain');
+      const $sumDst = document.getElementById('sum-dist');
+
+      let hudVisible = true;
+      let miniVisible = true;
+
+      function updateDlHref(){
+        const qs = new URLSearchParams({ hud: hudVisible?1:0, chart: miniVisible?1:0 });
+        $dl.href = `${DL_BASE}?${qs.toString()}`;
+      }
+      updateDlHref();
+
+      document.querySelectorAll('.speed-btn').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('active'));
+          btn.classList.add('active');
+          video.playbackRate = Number(btn.dataset.rate||1);
+        });
+      });
+
+      let rafId=null;
+      function tick(){
+        const mi = milesAtTime(video.currentTime||0);
+        if(hudVisible){
+          $speed.textContent = `${mphAtMiles(mi).toFixed(1)} mph`;
+          $elev.textContent  = `${elevAtMiles(mi).toFixed(0)} ft`;
+          $dist.textContent  = `${mi.toFixed(2)} mi`;
+        }
+        if(miniVisible) updateMini(mi);
+        updateCursor(mi);
+        rafId = requestAnimationFrame(tick);
+      }
+      video.addEventListener('play', ()=>{ $sumBar.classList.add('d-none'); cancelAnimationFrame(rafId); tick(); });
+      video.addEventListener('pause', ()=> cancelAnimationFrame(rafId));
+      video.addEventListener('loadedmetadata', ()=>{ updateCursor(0); updateMini(0); });
+      video.addEventListener('ended', ()=>{
+        cancelAnimationFrame(rafId);
+        $sumAvg.textContent  = `${(avgMph).toFixed(1)} mph`;
+        $sumGain.textContent = `${(totalGainFt).toFixed(0)} ft`;
+        $sumDst.textContent  = `${totalMiles.toFixed(2)} mi`;
+        $sumBar.classList.remove('d-none');
+      });
+
+      $toggle.addEventListener('click', ()=>{
+        hudVisible = !hudVisible;
+        $hud.classList.toggle('d-none', !hudVisible);
+        $toggle.textContent = hudVisible ? 'Hide stats' : 'Show stats';
+        updateDlHref();
+      });
+      $togMini.addEventListener('click', ()=>{
+        miniVisible = !miniVisible;
+        $miniW.classList.toggle('d-none', !miniVisible);
+        $togMini.textContent = miniVisible ? 'Hide mini chart' : 'Show mini chart';
+        updateDlHref();
+      });
+
+      // click big chart to seek
+      document.getElementById('elevChart').addEventListener('click',(evt)=>{
+        const r = evt.target.getBoundingClientRect();
+        const x = evt.clientX - r.left;
+        const miles = chart.scales.x.getValueForPixel(x);
+        if(Number.isFinite(miles)){
+          const t = Math.max(0, Math.min(durationS, (miles/totalMiles)*durationS));
+          video.currentTime = t;
+          updateCursor(miles); updateMini(miles);
+          if(video.paused) video.play();
+        }
+      });
+    })().catch(console.error);
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
