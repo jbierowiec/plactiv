@@ -7,7 +7,7 @@ get_flashed_messages() %} {% if messages %}
   <div class="col-lg-8 col-xl-7">
     <div class="card shadow-sm">
       <div class="card-body p-4">
-        <h1 class="h4 mb-3">Upload your GPX</h1>
+        <h1 class="h4 mb-3">Upload your activity file</h1>
 
         <form
           method="POST"
@@ -16,12 +16,17 @@ get_flashed_messages() %} {% if messages %}
           class="vstack gap-3"
         >
           <div>
-            <label class="form-label">Choose a .gpx file</label>
+            <label class="form-label">Choose a file</label>
             <input
               class="form-control"
               type="file"
-              name="gpxfile"
-              accept=".gpx"
+              name="trackfiles"
+              accept=".gpx,.kml,.tcx,.fit,
+          application/gpx+xml,
+          application/vnd.google-earth.kml+xml,
+          application/vnd.garmin.tcx+xml,
+          application/octet-stream"
+              multiple
               required
             />
           </div>
@@ -85,13 +90,8 @@ get_flashed_messages() %} {% if messages %}
           </div>
 
           <button class="btn btn-primary">Generate Video</button>
+          <hr class="my-4" />
         </form>
-
-        <hr class="my-4" />
-        <div class="form-text">
-          Tip: FFmpeg is bundled via <code>imageio-ffmpeg</code>. Map tiles are
-          cached locally.
-        </div>
       </div>
     </div>
   </div>

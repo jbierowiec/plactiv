@@ -41,7 +41,7 @@ for d in (UPLOAD_DIR, ELEVATION_DIR, VIDEO_DIR, TRACK_DIR, PROFILE_DIR, TILE_CAC
     d.mkdir(parents=True, exist_ok=True)
 
 MAPTILER_KEY = os.environ.get("MAPTILER_KEY", "YOUR_MAPTILER_KEY")
-ALLOWED_GPX_EXTS = {".gpx"}
+ALLOWED_EXTS = {".gpx", ".fit", ".tcx", ".kml"}
 
 # =============================================================================
 # GPX profile helpers (used for HUD/chart & overlays)
@@ -528,7 +528,7 @@ def download(vid):
 # Small helpers
 # =========================
 def _allowed_gpx(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_GPX_EXTS
+    return Path(filename).suffix.lower() in ALLOWED_EXTS
 
 def _moving_avg(arr: np.ndarray, w: int) -> np.ndarray:
     if w <= 1:
