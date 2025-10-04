@@ -1,5 +1,96 @@
-body { background: #f6f7fb; }
-.card { border: 0; border-radius: 1rem; }
-.navbar-brand { letter-spacing: 0.2px; }
-.speed-btn.active { color: #fff !important; }
-video { image-rendering: auto; }
+/* Base */
+body {
+  background: #f6f7fb;
+  margin: 0;
+  padding: 0;
+  scroll-behavior: smooth;
+  /* Optional: snap between full-height sections */
+  scroll-snap-type: y mandatory;
+}
+
+.navbar-brand {
+  letter-spacing: 0.2px;
+}
+.speed-btn.active {
+  color: #fff !important;
+}
+video {
+  image-rendering: auto;
+}
+
+/* Cards */
+.card {
+  border: 0;
+  border-radius: 1rem;
+}
+
+/* Make each section fill the screen and snap nicely */
+section {
+  min-height: 100vh; /* full screen */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 0; /* breathing room */
+  scroll-snap-align: start;
+}
+
+/* Tweak the hero video so it fits mobile better */
+.hero-video {
+  max-width: 960px;
+}
+@media (max-width: 576px) {
+  .hero-video {
+    max-width: 100%;
+  }
+}
+
+/* Product cards: comfortable on desktop, compact on mobile */
+.tool-card {
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.tool-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+}
+
+/* Typography scaling */
+#product .card-title {
+  font-size: 1.125rem;
+}
+#product .card-text {
+  color: #556;
+}
+
+@media (max-width: 576px) {
+  /* tighter spacing and larger tap targets on mobile */
+  #product .card-body {
+    padding: 1.25rem;
+  }
+  #product .card-title {
+    font-size: 1.05rem;
+  }
+  #product .card-text {
+    font-size: 0.95rem;
+  }
+  .btn {
+    padding: 0.6rem 1rem;
+  }
+}
+
+/* Contact form width */
+.contact-form {
+  max-width: 600px;
+}
+
+/* Section-specific backgrounds if you want contrast */
+#hero {
+  background: #f8f9fa;
+}
+#product {
+  background: #ffffff;
+}
+#contact {
+  background: #f8f9fa;
+}

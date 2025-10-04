@@ -1,18 +1,26 @@
 import os
 import io
+import csv
 import uuid
 import json
 import math
+import time
+import zipfile
 import gpxpy
+import gpxpy.gpx
 import requests
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
 from pathlib import Path
 from PIL import Image, ImageDraw
 from tempfile import NamedTemporaryFile
+from werkzeug.utils import secure_filename
 from utils.map_video import generate_map_flyover_video, burn_overlays_on_video
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, flash, send_file, abort
+    url_for, flash, send_file, abort, url_for
 )
 
 # =============================================================================
@@ -23,15 +31,17 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret_key")
 
 BASE_DIR    = Path(__file__).resolve().parent
 UPLOAD_DIR  = BASE_DIR / "uploads"
+ELEVATION_DIR = BASE_DIR / "static" / "elevation"
 VIDEO_DIR   = BASE_DIR / "static" / "videos"
 TRACK_DIR   = BASE_DIR / "static" / "tracks"
 PROFILE_DIR = BASE_DIR / "static" / "profiles"
 TILE_CACHE  = BASE_DIR / "tile_cache_fullview"   
 
-for d in (UPLOAD_DIR, VIDEO_DIR, TRACK_DIR, PROFILE_DIR, TILE_CACHE):
+for d in (UPLOAD_DIR, ELEVATION_DIR, VIDEO_DIR, TRACK_DIR, PROFILE_DIR, TILE_CACHE):
     d.mkdir(parents=True, exist_ok=True)
 
 MAPTILER_KEY = os.environ.get("MAPTILER_KEY", "YOUR_MAPTILER_KEY")
+ALLOWED_GPX_EXTS = {".gpx"}
 
 # =============================================================================
 # GPX profile helpers (used for HUD/chart & overlays)
@@ -348,9 +358,11 @@ def landing():
     """Landing page (hero + product cards + contact)."""
     return render_template("landing.html")
 
+'''
 @app.route("/elevation")
 def elevation():
     return render_template("elevation.html")
+'''
 
 @app.route("/video_uploads", methods=["GET"])
 def video_uploads():
@@ -509,6 +521,246 @@ def download(vid):
         )
 
     return send_file(out.as_posix(), as_attachment=True, download_name=f"flyover{suffix}.mp4")
+
+
+
+# =========================
+# Small helpers
+# =========================
+def _allowed_gpx(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_GPX_EXTS
+
+def _moving_avg(arr: np.ndarray, w: int) -> np.ndarray:
+    if w <= 1:
+        return arr
+    pad = w // 2
+    arr_padded = np.pad(arr, (pad, pad), mode="edge")
+    kernel = np.ones(w) / w
+    return np.convolve(arr_padded, kernel, mode="valid")
+
+def _haversine(lat1, lon1, lat2, lon2) -> float:
+    """
+    Returns distance in meters between two lat/lon points.
+    """
+    R = 6371000.0
+    p1 = math.radians(lat1); p2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+def _segment_difficulty(grade_pct: float) -> str:
+    """
+    Simple heuristic:
+      uphill:    <3 Easy, 3-6 Moderate, 6-9 Hard, >=9 Very Hard
+      downhill:  mirror with 'Down' prefix
+    """
+    if grade_pct >= 0:
+        if grade_pct < 3:   return "Easy"
+        if grade_pct < 6:   return "Moderate"
+        if grade_pct < 9:   return "Hard"
+        return "Very Hard"
+    else:
+        g = abs(grade_pct)
+        if g < 3:   return "Easy Down"
+        if g < 6:   return "Moderate Down"
+        if g < 9:   return "Hard Down"
+        return "Very Hard Down"
+
+def _units_convert(dist_m, ele_m, units: str):
+    if units == "metric":
+        return dist_m / 1000.0, ele_m  # km, m
+    else:
+        # mi, ft
+        return dist_m / 1609.344, ele_m * 3.28084
+
+def _units_labels(units: str):
+    return ("Distance (km)", "Elevation (m)") if units == "metric" else ("Distance (mi)", "Elevation (ft)")
+
+# =========================
+# Core GPX → arrays
+# =========================
+def extract_track_arrays(gpx_bytes: bytes, smooth_window: int, units: str):
+    """
+    Parse GPX and return:
+      distance_arr (monotonic along track), elevation_arr (same length),
+      grade_pct_arr (len-1 for segments, we’ll prepend 0 to align)
+    """
+    gpx = gpxpy.parse(io.BytesIO(gpx_bytes))
+    pts = []
+    for track in gpx.tracks:
+        for seg in track.segments:
+            for p in seg.points:
+                if p.latitude is not None and p.longitude is not None and p.elevation is not None:
+                    pts.append((p.latitude, p.longitude, float(p.elevation)))
+    if len(pts) < 2:
+        raise ValueError("Not enough points with elevation in GPX.")
+
+    lats = np.array([p[0] for p in pts], dtype=float)
+    lons = np.array([p[1] for p in pts], dtype=float)
+    eles_m = np.array([p[2] for p in pts], dtype=float)
+
+    # cumulative distance in meters
+    seg_d = np.zeros(len(lats)-1, dtype=float)
+    for i in range(len(seg_d)):
+        seg_d[i] = _haversine(lats[i], lons[i], lats[i+1], lons[i+1])
+    dist_m = np.concatenate([[0.0], np.cumsum(seg_d)])
+
+    # smoothing elevations (optional)
+    eles_m_s = _moving_avg(eles_m, smooth_window)
+
+    # grade (%) per segment
+    # avoid divide-by-zero on tiny horizontal distance
+    grade_pct = np.zeros(len(seg_d), dtype=float)
+    tiny = 1e-6
+    d_ele = np.diff(eles_m_s)
+    grade_pct = 100.0 * d_ele / np.maximum(seg_d, tiny)
+
+    # convert to requested units for plotting/export
+    dist_u, ele_u = _units_convert(dist_m, eles_m_s, units)
+    # align grade array with point arrays by prepending 0 for the first point
+    grade_u = np.concatenate([[0.0], grade_pct])
+
+    return dist_u, ele_u, grade_u
+
+# =========================
+# Plot + CSV writers
+# =========================
+def write_elevation_png(out_path: Path, title: str, dist_u: np.ndarray, ele_u: np.ndarray, units: str):
+    xlab, ylab = _units_labels(units)
+    plt.figure(figsize=(10, 4.2), dpi=130)
+    plt.plot(dist_u, ele_u, linewidth=1.7)
+    plt.title(title)
+    plt.xlabel(xlab); plt.ylabel(ylab)
+    plt.grid(True, linestyle="--", alpha=0.35)
+    plt.tight_layout()
+    plt.savefig(out_path.as_posix())
+    plt.close()
+
+def write_detail_csv(out_path: Path, base_name: str, dist_u: np.ndarray, ele_u: np.ndarray, grade_u: np.ndarray, units: str):
+    """
+    Per-point CSV: index, distance, elevation, grade %, difficulty
+    """
+    xlab, ylab = _units_labels(units)
+    with out_path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["file", "point_index", xlab, ylab, "Grade (%)", "Segment Difficulty"])
+        for i in range(len(dist_u)):
+            diff = _segment_difficulty(grade_u[i])
+            w.writerow([base_name, i, f"{dist_u[i]:.5f}", f"{ele_u[i]:.3f}", f"{grade_u[i]:.2f}", diff])
+
+def summarize_track(base_name: str, dist_u: np.ndarray, ele_u: np.ndarray, units: str) -> dict:
+    gain = np.sum(np.clip(np.diff(ele_u), 0, None))
+    loss = -np.sum(np.clip(np.diff(ele_u), None, 0))
+    return {
+        "file": base_name,
+        "total_distance": float(dist_u[-1]),
+        "min_elevation": float(np.min(ele_u)),
+        "max_elevation": float(np.max(ele_u)),
+        "elevation_gain": float(gain),
+        "elevation_loss": float(loss),
+        "units": "metric" if units == "metric" else "imperial"
+    }
+
+# =========================
+# Flask route
+# =========================
+@app.route("/elevation", methods=["GET", "POST"])
+def elevation():
+    if request.method == "GET":
+        return render_template("elevation.html")
+
+    files = request.files.getlist("gpx_files")
+    if not files:
+        return render_template("elevation.html", error="Please choose at least one GPX file.")
+    smooth_window = max(int(request.form.get("smooth_window", 5) or 5), 1)
+    units = (request.form.get("units") or "imperial").strip().lower()
+    want_combined = bool(request.form.get("make_combined_plot"))
+
+    # per-request working dir
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    work_dir = ELEVATION_DIR / f"elev-{ts}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    combined_curves = []  # (title, dist_u, ele_u)
+    summary_rows = []
+
+    # Process each GPX
+    for f in files:
+        if not f or not f.filename:
+            continue
+        if not _allowed_gpx(f.filename):
+            continue
+
+        safe_base = secure_filename(Path(f.filename).stem) or "track"
+        gpx_bytes = f.read()
+
+        try:
+            dist_u, ele_u, grade_u = extract_track_arrays(gpx_bytes, smooth_window, units)
+        except Exception as e:
+            # record an error file so user knows which failed
+            (work_dir / f"{safe_base}__ERROR.txt").write_text(str(e))
+            continue
+
+        # PNG
+        png_path = work_dir / f"{safe_base}_elevation.png"
+        write_elevation_png(
+            png_path,
+            title=f"Elevation Profile - {safe_base}",
+            dist_u=dist_u,
+            ele_u=ele_u,
+            units=units
+        )
+
+        # CSV
+        csv_path = work_dir / f"{safe_base}.csv"
+        write_detail_csv(csv_path, safe_base, dist_u, ele_u, grade_u, units)
+
+        # combined plot data & summary
+        combined_curves.append((safe_base, dist_u, ele_u))
+        summary_rows.append(summarize_track(safe_base, dist_u, ele_u, units))
+
+    # combined summary CSV
+    if summary_rows:
+        sum_path = work_dir / "combined_summary.csv"
+        keys = ["file", "total_distance", "min_elevation", "max_elevation", "elevation_gain", "elevation_loss", "units"]
+        with sum_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            for row in summary_rows:
+                w.writerow(row)
+
+    # Optional combined plot
+    if want_combined and len(combined_curves) >= 2:
+        plt.figure(figsize=(10, 4.2), dpi=130)
+        for (title, dist_u, ele_u) in combined_curves:
+            plt.plot(dist_u, ele_u, linewidth=1.4, label=title)
+        xlab, ylab = _units_labels(units)
+        plt.title("Elevation Profiles (Combined)")
+        plt.xlabel(xlab); plt.ylabel(ylab)
+        plt.grid(True, linestyle="--", alpha=0.35)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig((work_dir / "combined_plot.png").as_posix())
+        plt.close()
+
+    # Package everything into a ZIP to auto-download
+    zip_name = f"elevation_outputs_{ts}.zip"
+    zip_path = work_dir / zip_name
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for p in work_dir.iterdir():
+            if p.name == zip_name:
+                continue
+            z.write(p, arcname=p.name)
+
+    # Return as file download
+    return send_file(
+        zip_path,
+        as_attachment=True,
+        download_name=zip_name,
+        mimetype="application/zip"
+    )
+
 
 
 if __name__ == "__main__":
