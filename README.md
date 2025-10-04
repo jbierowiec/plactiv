@@ -1,15 +1,3 @@
 # plactiv 
 
-## GPX Flyover (2D Map + 3D Terrain)
-
-Upload a `.gpx`, get a video:
-- **2D Map**: route over OpenStreetMap tiles (camera follows the path).
-- **3D Terrain**: shaded surface from public Terrarium DEM tiles with a flyover camera.
-
-## Quick start
-```bash
-python3 -m venv .venv
-source .venv/bin/activate           # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
-# visit http://127.0.0.1:5000
+## An application that helps you visualize, prepare for, and advise on your planned itineraries. The application currently allows users to do two things: 1. to determine the elevation of any uploaded `.gpx` file, produces a `.csv` file with information about the calculated elevation gain, loss, grade as well as segment difficulty level. 2. To create a video, tracing out the planned route, and providing the total mileage, expected speed, and elevation along the route from a simulated itinerary. 
