@@ -1,0 +1,99 @@
+{% extends "base.html" %} {% block content %} {% with messages =
+get_flashed_messages() %} {% if messages %}
+<div class="alert alert-warning">{{ messages[0] }}</div>
+{% endif %} {% endwith %}
+
+<div class="row justify-content-center">
+  <div class="col-lg-8 col-xl-7">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h4 mb-3">Upload your GPX</h1>
+
+        <form
+          method="POST"
+          action="{{ url_for('upload') }}"
+          enctype="multipart/form-data"
+          class="vstack gap-3"
+        >
+          <div>
+            <label class="form-label">Choose a .gpx file</label>
+            <input
+              class="form-control"
+              type="file"
+              name="gpxfile"
+              accept=".gpx"
+              required
+            />
+          </div>
+
+          <div>
+            <label class="form-label d-block mb-1">Mode</label>
+            <div class="btn-group" role="group">
+              <input
+                type="radio"
+                class="btn-check"
+                name="mode"
+                id="mode2d"
+                value="map"
+                checked
+              />
+              <label class="btn btn-outline-primary" for="mode2d">2D Map</label>
+
+              <input
+                type="radio"
+                class="btn-check"
+                name="mode"
+                id="mode3d"
+                value="webgl3d"
+              />
+              <label class="btn btn-outline-primary" for="mode3d"
+                >3D Terrain (web)</label
+              >
+            </div>
+            <div class="form-text">
+              3D renders in the browser; 2D produces a downloadable MP4.
+            </div>
+          </div>
+
+          <div>
+            <label class="form-label d-block mb-1">Orientation</label>
+            <div class="btn-group" role="group">
+              <input
+                type="radio"
+                class="btn-check"
+                name="orientation"
+                id="orientH"
+                value="h"
+                checked
+              />
+              <label class="btn btn-outline-secondary" for="orientH"
+                >Horizontal 16:9 (1280×720)</label
+              >
+
+              <input
+                type="radio"
+                class="btn-check"
+                name="orientation"
+                id="orientV"
+                value="v"
+              />
+              <label class="btn btn-outline-secondary" for="orientV"
+                >Vertical 9:16 (720×1280)</label
+              >
+            </div>
+            <div class="form-text">Vertical is handy for Instagram/Reels.</div>
+          </div>
+
+          <button class="btn btn-primary">Generate Video</button>
+        </form>
+
+        <hr class="my-4" />
+        <div class="form-text">
+          Tip: FFmpeg is bundled via <code>imageio-ffmpeg</code>. Map tiles are
+          cached locally.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
